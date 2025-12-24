@@ -1,0 +1,19 @@
+# Core
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Google Cloud
+google-cloud-storage>=2.14.0
+
+# PDF Processing
+pypdf>=3.17.0
+
+# HTTP/Async
+aiohttp>=3.9.0
+aiolimiter>=1.1.0
+
+# Utilities
+python-dotenv>=1.0.0
+
