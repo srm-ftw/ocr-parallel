@@ -51,7 +51,7 @@ API HTTP para procesar páginas específicas de PDFs almacenados en Google Cloud
    GEMINI_API_KEY=your_gemini_api_key_here
 
    # Rate Limiting
-   MAX_CONCURRENT_REQUESTS=10
+   MAX_CONCURRENT_REQUESTS=30  # Default: 30 (aumentado para mejor paralelización)
    GEMINI_RATE_LIMIT_PER_MINUTE=60
    GEMINI_MAX_RETRIES=3
    GEMINI_RETRY_BACKOFF_BASE=2
@@ -71,28 +71,30 @@ python scripts/run_local.py
 
 ### Opción 2: Uvicorn directo
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ### Opción 3: Python module
 ```bash
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --port 8001
 ```
 
-El servidor estará disponible en: `http://localhost:8000`
+El servidor estará disponible en: `http://localhost:8001`
 
 ## Verificación
 
-- **Health check:** `curl http://localhost:8000/health`
-- **Documentación API:** `http://localhost:8000/docs`
-- **Endpoint OCR:** `POST http://localhost:8000/api/v1/ocr/pages`
+- **Health check:** `curl http://localhost:8001/health`
+- **Documentación API:** `http://localhost:8001/docs`
+- **Endpoint OCR:** `POST http://localhost:8001/api/v1/ocr/pages`
 
 ## Uso del Endpoint
 
 ### Request
 
+Usa ngrok
+
 ```bash
-curl -X POST "http://localhost:8000/api/v1/ocr/pages" \
+curl -X POST "http://localhost:8001/api/v1/ocr/pages" \
   -H "Content-Type: application/json" \
   -d '{
     "pages": [
@@ -156,6 +158,29 @@ ocr-endpoint/
 
 ## Características Técnicas
 
+### Optimizaciones Implementadas
+
+**1. Agrupación por PDF con Liberación de Memoria:**
+- Los requests se agrupan por archivo PDF
+- Solo se mantiene 1 PDF en memoria a la vez
+- Después de procesar todas las páginas de un PDF, se libera de memoria
+- **Beneficio**: Reduce uso de memoria cuando hay múltiples PDFs diferentes
+- **Ejemplo**: 10 PDFs de 50MB cada uno = máximo 50MB en memoria (no 500MB)
+
+**2. Cache de PDFs (dentro de cada grupo):**
+- Cada archivo PDF se descarga solo una vez por grupo
+- Usa locks para evitar descargas concurrentes del mismo archivo
+- **Ahorro masivo**: Si un PDF tiene 100 páginas, solo se descarga 1 vez (no 100)
+
+**3. PDF Extraction Async:**
+- La extracción de páginas se ejecuta en thread pool para no bloquear el event loop
+- Permite mejor paralelización de operaciones I/O
+
+**4. Concurrencia Optimizada:**
+- Default: 30 requests concurrentes (configurable)
+- Permite procesar múltiples páginas simultáneamente
+- Las páginas del mismo PDF se procesan en paralelo
+
 ### Deduplicación
 
 El endpoint identifica automáticamente páginas duplicadas (mismo bucket, file, page) y las procesa solo una vez, optimizando costos y tiempo.
@@ -168,8 +193,9 @@ El endpoint identifica automáticamente páginas duplicadas (mismo bucket, file,
 ### Paralelización
 
 - Procesa múltiples páginas en paralelo usando `asyncio`
-- Control de concurrencia configurable (`MAX_CONCURRENT_REQUESTS`)
+- Control de concurrencia configurable (`MAX_CONCURRENT_REQUESTS`, default: 30)
 - Rate limiting para respetar cuotas de Gemini API
+- Cache inteligente de PDFs para evitar descargas redundantes
 
 ### Rate Limiting
 

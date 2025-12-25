@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.endpoints import ocr
+from app.api.endpoints import extractor, ocr
 from app.api.router import router
 from app.config import settings
 from app.core.exceptions import (
@@ -20,6 +20,7 @@ from app.core.exceptions import (
 )
 from app.core.logging_config import setup_logging
 from app.models.common import ErrorResponse, HealthResponse
+from app.services.extractor_service import ExtractorService
 from app.services.health_service import HealthService
 from app.services.ocr_service import OCRService
 
@@ -30,20 +31,23 @@ logger = logging.getLogger(__name__)
 
 # Global service instances
 ocr_service: OCRService = None
+extractor_service: ExtractorService = None
 health_service: HealthService = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown."""
-    global ocr_service, health_service
+    global ocr_service, extractor_service, health_service
 
     # Startup
     logger.info("Starting OCR endpoint service...")
     try:
         ocr_service = OCRService()
+        extractor_service = ExtractorService()
         health_service = HealthService()
         ocr.set_ocr_service(ocr_service)
+        extractor.set_extractor_service(extractor_service)
         logger.info("Services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}", exc_info=True)
@@ -55,6 +59,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down OCR endpoint service...")
     if ocr_service:
         await ocr_service.close()
+    if extractor_service:
+        await extractor_service.close()
     logger.info("Services closed")
 
 
@@ -172,5 +178,5 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.port, reload=True)
 

@@ -1,69 +1,69 @@
-"""OCR endpoint."""
+"""Extractor endpoint."""
 
 import logging
 import time
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.config import DEFAULT_GEMINI_MODEL, get_dynamic_model, get_model_limits, settings
-from app.models.ocr import OCRRequest, OCRResponse
-from app.services.ocr_service import OCRService
+from app.models.extractor import InmuebleRequest, InmuebleResponse
+from app.services.extractor_service import ExtractorService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", tags=["OCR"])
+router = APIRouter(prefix="/api/v1", tags=["Extractor"])
 
 # Global service instance (will be initialized in main)
-ocr_service: OCRService = None
+extractor_service: ExtractorService = None
 
 
-def set_ocr_service(service: OCRService):
-    """Set the OCR service instance."""
-    global ocr_service
-    ocr_service = service
+def set_extractor_service(service: ExtractorService):
+    """Set the extractor service instance."""
+    global extractor_service
+    extractor_service = service
 
 
-@router.post("/ocr/pages", response_model=OCRResponse)
-async def process_ocr_pages(
-    request: OCRRequest,
+@router.post("/extractor/inmuebles", response_model=List[InmuebleResponse])
+async def extract_inmuebles(
+    inmuebles: List[InmuebleRequest] = Body(..., description="Array de inmuebles a procesar"),
     model: Optional[str] = Query(
         None,
         description="Gemini model to use (e.g., 'gemini-2.0-flash', 'gemini-2.5-pro'). Defaults to configured default.",
     ),
-) -> OCRResponse:
+) -> List[InmuebleResponse]:
     """
-    Process OCR for multiple pages in parallel.
+    Extract inmueble sections from OCR text using Gemini.
 
     This endpoint:
-    - Receives a list of page requests (bucket, file, page)
-    - Deduplicates pages (same bucket/file/page processed only once)
-    - Processes unique pages in parallel
+    - Receives a list of inmueble requests (nombre_inmueble, folio, texto_ocr_completo)
+    - Processes each inmueble in parallel using Gemini
     - Returns results in the same order as input
+    - Handles errors per item (doesn't fail entire batch)
     
     Query Parameters:
-    - model: Optional Gemini model name.
-             - Use 'dynamic' for automatic selection: Pro for <threshold pages, Flash for >=threshold
+    - model: Optional Gemini model name. 
+             - Use 'dynamic' for automatic selection: Pro for <threshold items, Flash for >=threshold
              - Available models: 'gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-2.5-flash', etc.
              - If not provided, uses default from configuration.
     """
-    if ocr_service is None:
-        raise HTTPException(status_code=500, detail="OCR service not initialized")
+    if extractor_service is None:
+        raise HTTPException(status_code=500, detail="Extractor service not initialized")
 
-    if not request.pages:
-        return OCRResponse(results=[])
+    if not inmuebles:
+        return []
 
     # Determine model to use
     if model == "dynamic":
         # Calculate model dynamically based on batch size
         model_to_use = get_dynamic_model(
-            len(request.pages),
+            len(inmuebles),
             threshold=settings.dynamic_model_threshold,
             fast_model=settings.dynamic_model_fast,
             slow_model=settings.dynamic_model_slow,
         )
         logger.info(
-            f"Dynamic model selection: {len(request.pages)} pages -> {model_to_use} "
+            f"Dynamic model selection: {len(inmuebles)} items -> {model_to_use} "
             f"(threshold: {settings.dynamic_model_threshold}, "
             f"fast: {settings.dynamic_model_fast}, slow: {settings.dynamic_model_slow})"
         )
@@ -81,21 +81,21 @@ async def process_ocr_pages(
     request_start_time = time.time()
     try:
         logger.info(
-            f"Received OCR request for {len(request.pages)} pages "
+            f"Received extractor request for {len(inmuebles)} inmuebles "
             f"(model: {model_to_use})"
         )
-        results = await ocr_service.process_pages_async(request.pages, model=model_to_use)
+        results = await extractor_service.process_inmuebles_async(inmuebles, model=model_to_use)
         request_elapsed = time.time() - request_start_time
         logger.info(
-            f"Completed OCR request in {request_elapsed:.2f}s, "
+            f"Completed extractor request in {request_elapsed:.2f}s, "
             f"returning {len(results)} results"
         )
-        return OCRResponse(results=results)
+        return results
 
     except Exception as e:
         request_elapsed = time.time() - request_start_time
         logger.error(
-            f"Error processing OCR request after {request_elapsed:.2f}s: {e}",
+            f"Error processing extractor request after {request_elapsed:.2f}s: {e}",
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from e

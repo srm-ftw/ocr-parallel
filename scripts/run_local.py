@@ -10,6 +10,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import uvicorn
+from app.config import settings
 
 if __name__ == "__main__":
     # Check if .env file exists
@@ -22,7 +23,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=settings.port,
         reload=True,
         log_level="info",
     )
