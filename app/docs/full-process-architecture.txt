@@ -1,0 +1,327 @@
+================================================================================
+                    FULL PROCESS PIPELINE - ARQUITECTURA
+================================================================================
+
+VISIÓN GENERAL
+--------------
+Sistema completo para procesar escrituras públicas colombianas que realiza:
+1. OCR completo de todas las páginas de una escritura
+2. Extracción inteligente de información de inmuebles (híbrido: texto + LLM)
+3. Subida de resultados a GCS
+
+Diseñado para ser altamente paralelo, eficiente y robusto.
+Maneja escrituras de 30-1500 páginas y 10-500 inmuebles por escritura.
+
+================================================================================
+                            ARQUITECTURA DE COMPONENTES
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              API LAYER                                      │
+│                                                                             │
+│  POST /api/v1/full-process                                                  │
+│  └─> Retorna 202 Accepted con job_id y output_file_name                     │
+│                                                                             │
+│  GET /api/v1/full-process/{job_id}                                          │
+│  └─> Consulta status del job (processing/completed)                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ORCHESTRATOR LAYER                                  │
+│                                                                             │
+│  FullProcessOrchestrator                                                    │
+│  ├─> Coordina el flujo completo                                             │
+│  ├─> Controla paralelismo (max 3 escrituras simultáneas)                    │
+│  ├─> Maneja errores por escritura (no falla todo el batch)                  │
+│  └─> Sube resultados finales a GCS                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    │                               │
+                    ▼                               ▼
+┌───────────────────────────────┐  ┌───────────────────────────────┐
+│      FULL OCR SERVICE         │  │   FULL EXTRACTOR SERVICE      │
+│                               │  │                               │
+│  FullOCRService               │  │  FullExtractorService         │
+│  ├─> Descarga PDF de GCS      │  │  ├─> Fase 1: Localización     │
+│  ├─> OCR todas las páginas    │  │  │   textual (sin LLM)        │
+│  │   en paralelo              │  │  ├─> Fase 2: Refinamiento     │
+│  ├─> Limpia texto OCR         │  │  │   LLM (si necesario)       │
+│  └─> Crea chunks con overlap  │  │  └─> Fase 3: Extracción       │
+│      (40 págs, 5 overlap)     │  │      final (ExtractorService) │
+└───────────────────────────────┘  └───────────────────────────────┘
+         │                                      │
+         │                                      │
+         ▼                                      ▼
+┌───────────────────────────────┐  ┌───────────────────────────────┐
+│    EXISTING SERVICES          │  │    EXISTING SERVICES          │
+│                               │  │                               │
+│  OCRService (reutilizado)     │  │  ExtractorService (reutilizado)│
+│  GeminiClient                 │  │  GeminiClient                  │
+│  GCSClient                    │  │  Text Localization Utils      │
+└───────────────────────────────┘  └───────────────────────────────┘
+
+================================================================================
+                              FLUJO DE DATOS
+================================================================================
+
+CLIENTE
+  │
+  │ POST /api/v1/full-process
+  │ { escrituras: [...] }
+  │
+  ▼
+ENDPOINT
+  │
+  │ Genera job_id
+  │ Inicia background task
+  │
+  │ Retorna 202:
+  │ { job_id, output_bucket, output_file_name }
+  │
+  ▼
+ORCHESTRATOR (Background)
+  │
+  │ Para cada escritura (paralelo controlado, max 3):
+  │
+  ├─> FULL OCR
+  │   │
+  │   ├─> Descargar PDF de GCS
+  │   │
+  │   ├─> Obtener número de páginas
+  │   │
+  │   ├─> Procesar todas las páginas en paralelo:
+  │   │   ├─> Extraer página del PDF (thread pool)
+  │   │   ├─> OCR con Gemini
+  │   │   └─> Limpiar texto OCR
+  │   │
+  │   └─> Crear chunks con overlap (40 págs, 5 overlap)
+  │
+  ├─> FULL EXTRACTOR
+  │   │
+  │   ├─> FASE 1: Localización Textual
+  │   │   ├─> Tokenizar nombre de inmueble
+  │   │   ├─> Generar variantes (sinónimos)
+  │   │   └─> Buscar en chunks (threshold 60%)
+  │   │
+  │   ├─> FASE 2: Refinamiento LLM (solo si necesario)
+  │   │   └─> Para inmuebles sin match, usar LLM
+  │   │
+  │   └─> FASE 3: Extracción
+  │       ├─> Concatenar páginas relevantes
+  │       └─> ExtractorService.process_inmuebles_async()
+  │
+  └─> Consolidar resultados
+      │
+      └─> Subir JSON a GCS bucket
+
+================================================================================
+                          ESTRUCTURAS DE DATOS
+================================================================================
+
+INPUT (Request)
+---------------
+{
+  "escrituras": [
+    {
+      "escritura_bucket": "escrituras_publicas",
+      "escritura_file_name": "escritura_109668.pdf",
+      "inmuebles": [
+        {
+          "inmueble": "APARTAMENTO 102 -T3",
+          "folio": "294-109668"
+        }
+      ]
+    }
+  ]
+}
+
+OUTPUT (Response 202)
+----------------------
+{
+  "job_id": "abc123",
+  "status": "processing",
+  "output_bucket": "output-bucket",
+  "output_file_name": "results_abc123.json",
+  "estimated_time_seconds": 120
+}
+
+OUTPUT FINAL (JSON en GCS)
+---------------------------
+[
+  {
+    "escritura_file_name": "escritura_109668.pdf",
+    "resultados": [
+      {
+        "inmueble": "APARTAMENTO 102 -T3",
+        "folio": "294-109668",
+        "status": "found",
+        "paginas": "45,46,47",
+        "text": "APARTAMENTO NÚMERO CIENTO DOS (102), TORRE TRES (T-3)..."
+      }
+    ],
+    "metadata": {
+      "total_pages": 150,
+      "processing_time_seconds": 45.2,
+      "ocr_time_seconds": 30.1,
+      "extraction_time_seconds": 15.1
+    }
+  }
+]
+
+================================================================================
+                          OPTIMIZACIONES CLAVE
+================================================================================
+
+1. PARALELISMO CONTROLADO
+   - Máximo 3 escrituras simultáneas (control de memoria)
+   - Todas las páginas de una escritura en paralelo
+   - Todos los inmuebles en paralelo
+
+2. CACHE INTELIGENTE
+   - PDFs se cachean en memoria durante procesamiento
+   - Evita descargas múltiples del mismo archivo
+
+3. CHUNKING CON OVERLAP
+   - 5 páginas de overlap garantiza que ningún inmueble quede cortado
+   - Reduce tokens procesados vs. enviar toda la escritura
+
+4. LOCALIZACIÓN HÍBRIDA
+   - Búsqueda textual rápida (sin LLM) para mayoría de casos
+   - LLM solo para casos edge donde búsqueda textual falla
+
+5. LIMPIEZA AUTOMÁTICA
+   - Texto OCR se limpia automáticamente (normaliza espacios)
+   - Mejora precisión de búsqueda y extracción
+
+================================================================================
+                          COMPONENTES PRINCIPALES
+================================================================================
+
+FullOCRService
+--------------
+- Procesa escrituras completas
+- Reutiliza lógica de OCRService para páginas individuales
+- Crea chunks con overlap
+- Limpia texto OCR automáticamente
+- Soporta modo local (sin GCS) para testing
+
+FullExtractorService
+--------------------
+- Localización híbrida (texto + LLM)
+- Reutiliza ExtractorService para extracción final
+- Maneja variantes de nombres de inmuebles exhaustivamente
+
+FullProcessOrchestrator
+-----------------------
+- Coordina el flujo completo
+- Maneja errores por escritura (no falla todo el batch)
+- Sube resultados a GCS
+
+Text Localization Utils
+-----------------------
+- Diccionario exhaustivo de sinónimos
+- Tokenización inteligente
+- Generación de variantes
+- Matching con threshold configurable
+
+Chunking Utils
+--------------
+- Crea chunks con overlap configurable
+- Convierte chunks a páginas
+- Concatena páginas para extracción
+
+================================================================================
+                          CONFIGURACIÓN
+================================================================================
+
+Variables de Entorno (.env)
+----------------------------
+OUTPUT_BUCKET=output-bucket-name          # Bucket para resultados
+GEMINI_API_KEY=your-api-key               # O GEMINI_API_KEYS=key1,key2,key3
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+
+Opcional:
+CHUNK_SIZE=40                              # Páginas por chunk (default: 40)
+CHUNK_OVERLAP=5                            # Páginas de overlap (default: 5)
+FULL_PROCESS_MAX_CONCURRENT_ESCRITURAS=3  # Max escrituras simultáneas
+
+================================================================================
+                          MÉTRICAS Y LOGGING
+================================================================================
+
+El sistema registra métricas detalladas en cada fase:
+
+OCR:
+  - Tiempo por página
+  - Total de páginas procesadas
+  - Errores por página
+  - Tiempo total de OCR
+
+Localización:
+  - Inmuebles encontrados vs. no encontrados
+  - Tiempo de búsqueda textual
+  - Tiempo de refinamiento LLM (si aplica)
+
+Extracción:
+  - Tiempo por inmueble
+  - Tamaño de respuesta
+  - Tasa de éxito/fallo
+
+Total:
+  - Tiempo total de procesamiento
+  - Throughput (páginas/seg, inmuebles/seg)
+  - Eficiencia (tiempo OCR vs. extracción)
+
+Formato de logs: [{index}/{total}][{status}][{phase}] {message}
+
+================================================================================
+                          MANEJO DE ERRORES
+================================================================================
+
+- Errores por página: Se registran pero no detienen el procesamiento
+- Errores por inmueble: Se retorna status "error" con mensaje
+- Errores por escritura: Se incluye en output con status de error, pero
+  continúa con otras escrituras
+- Errores de batch: Se suben resultados parciales si es posible
+
+================================================================================
+                          NOTAS TÉCNICAS
+================================================================================
+
+1. Sin separadores de página: El sistema no asume separadores en el texto OCR,
+   divide por número de página del PDF
+
+2. Overlap de 5 páginas: Suficiente para cubrir descripciones típicas de
+   inmuebles
+
+3. Threshold de matching: 60% de tokens debe coincidir (configurable)
+
+4. Modelo por defecto: gemini-2.0-flash (2000 RPM, 4M TPM)
+
+5. Modo local: FullOCRService soporta process_escritura_from_local_file()
+   para testing sin GCS
+
+================================================================================
+                          PRUEBAS LOCALES
+================================================================================
+
+Para probar sin GCS:
+
+1. Ejecutar script de prueba:
+   python scripts/test_full_process.py
+
+2. El script:
+   - Lee PDF local (escritura_test.pdf)
+   - Ejecuta OCR completo
+   - Extrae inmuebles
+   - Guarda resultados en test_results.json
+
+3. No requiere:
+   - GCS bucket configurado
+   - Credenciales de GCS
+   - Subir archivos a cloud
+
+================================================================================
+

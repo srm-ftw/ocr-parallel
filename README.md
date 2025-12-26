@@ -60,6 +60,7 @@ API HTTP para procesar páginas específicas de PDFs almacenados en Google Cloud
    ENVIRONMENT=local
    LOG_LEVEL=INFO
    API_V1_PREFIX=/api
+   API_KEY=your_api_key_here  # API key for authentication (x-api-key header)
    ```
 
 ## Ejecución Local
@@ -96,6 +97,7 @@ Usa ngrok
 ```bash
 curl -X POST "http://localhost:8001/api/v1/ocr/pages" \
   -H "Content-Type: application/json" \
+  -H "x-api-key: your_api_key_here" \
   -d '{
     "pages": [
       {

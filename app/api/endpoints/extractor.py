@@ -4,8 +4,9 @@ import logging
 import time
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.api.dependencies import verify_api_key
 from app.config import DEFAULT_GEMINI_MODEL, get_dynamic_model, get_model_limits, settings
 from app.models.extractor import InmuebleRequest, InmuebleResponse
 from app.services.extractor_service import ExtractorService
@@ -31,6 +32,7 @@ async def extract_inmuebles(
         None,
         description="Gemini model to use (e.g., 'gemini-2.0-flash', 'gemini-2.5-pro'). Defaults to configured default.",
     ),
+    _: str = Depends(verify_api_key),
 ) -> List[InmuebleResponse]:
     """
     Extract inmueble sections from OCR text using Gemini.

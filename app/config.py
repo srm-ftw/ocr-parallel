@@ -131,11 +131,29 @@ class Settings(BaseSettings):
     dynamic_model_fast: str = DYNAMIC_MODEL_CONFIG["fast"]  # Model for large batches (>= threshold)
     dynamic_model_slow: str = DYNAMIC_MODEL_CONFIG["slow"]  # Model for small batches (< threshold)
 
+    # Full Process Config
+    output_bucket: Optional[str] = None  # GCS bucket for output files
+    stats_bucket: Optional[str] = None  # GCS bucket for statistics JSON files
+    full_process_max_concurrent_escrituras: int = 3  # Max concurrent escrituras processing
+    chunk_size: int = 40  # Pages per chunk
+    chunk_overlap: int = 5  # Pages of overlap between chunks
+
     # App Config
-    environment: str = "local"
+    environment: str = "dev"  # dev or prod (prod includes local-tunnel)
     log_level: str = "INFO"
     api_v1_prefix: str = "/api"
     port: int = 8001  # Server port
+    api_key: Optional[str] = None  # API key for authentication
+
+    # Uvicorn Config
+    uvicorn_workers: int = 1  # Number of worker processes
+    uvicorn_timeout_keep_alive: Optional[int] = None  # Keep-alive timeout (None = auto based on environment)
+    uvicorn_timeout_graceful_shutdown: Optional[int] = None  # Graceful shutdown timeout (None = auto)
+    uvicorn_limit_concurrency: Optional[int] = None  # Max concurrent connections (None = auto)
+    uvicorn_backlog: int = 2048  # Backlog size
+
+    # Request Limits
+    max_request_size_mb: int = 50  # Maximum request body size in MB
 
     @property
     def gemini_api_keys_list(self) -> List[str]:
@@ -173,13 +191,47 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        """Check if running in production environment."""
-        return self.environment.lower() == "production"
+        """Check if running in production environment (prod includes local-tunnel)."""
+        return self.environment.lower() == "prod"
 
     @property
-    def is_local(self) -> bool:
-        """Check if running in local environment."""
-        return self.environment.lower() == "local"
+    def is_dev(self) -> bool:
+        """Check if running in development environment."""
+        return self.environment.lower() == "dev"
+
+    @property
+    def uvicorn_reload(self) -> bool:
+        """Whether to enable auto-reload (only in dev)."""
+        return self.is_dev
+
+    @property
+    def uvicorn_timeout_keep_alive_seconds(self) -> int:
+        """Get keep-alive timeout based on environment."""
+        if self.uvicorn_timeout_keep_alive is not None:
+            return self.uvicorn_timeout_keep_alive
+        # Defaults based on environment
+        return 5 if self.is_dev else 30
+
+    @property
+    def uvicorn_timeout_graceful_shutdown_seconds(self) -> int:
+        """Get graceful shutdown timeout based on environment."""
+        if self.uvicorn_timeout_graceful_shutdown is not None:
+            return self.uvicorn_timeout_graceful_shutdown
+        # Defaults based on environment
+        return 30 if self.is_dev else 60
+
+    @property
+    def uvicorn_limit_concurrency_value(self) -> Optional[int]:
+        """Get concurrency limit based on environment."""
+        if self.uvicorn_limit_concurrency is not None:
+            return self.uvicorn_limit_concurrency
+        # Defaults based on environment
+        return 50 if self.is_dev else 100
+
+    @property
+    def max_request_size_bytes(self) -> int:
+        """Get maximum request size in bytes."""
+        return self.max_request_size_mb * 1024 * 1024
 
 
 # Global settings instance

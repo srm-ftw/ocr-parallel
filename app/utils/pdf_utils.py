@@ -63,3 +63,26 @@ def extract_page_from_pdf(pdf_bytes: bytes, page_number: int) -> bytes:
         logger.error(f"Error extracting page {page_number}: {e}")
         raise PDFProcessingException(f"Failed to extract page {page_number}: {e}") from e
 
+
+def get_pdf_page_count(pdf_bytes: bytes) -> int:
+    """
+    Get the total number of pages in a PDF.
+
+    Args:
+        pdf_bytes: The PDF file as bytes
+
+    Returns:
+        int: Total number of pages
+
+    Raises:
+        PDFProcessingException: If reading the PDF fails
+    """
+    try:
+        pdf_reader = PdfReader(BytesIO(pdf_bytes))
+        page_count = len(pdf_reader.pages)
+        logger.debug(f"PDF has {page_count} pages")
+        return page_count
+    except Exception as e:
+        logger.error(f"Error getting page count: {e}")
+        raise PDFProcessingException(f"Failed to get page count: {e}") from e
+

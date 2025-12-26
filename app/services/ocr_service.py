@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.clients.gcs_client import GCSClient
 from app.clients.gemini_client import GeminiClient
-from app.config import settings
+from app.config import DEFAULT_GEMINI_MODEL, settings
 from app.core.exceptions import GCSException, GeminiAPIException, PDFProcessingException
 from app.models.ocr import OCRPageRequest, OCRPageResponse
 from app.utils.deduplication import create_unique_key, deduplicate_requests, map_results_back

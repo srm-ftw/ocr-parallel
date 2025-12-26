@@ -1,9 +1,10 @@
 """GCS client for downloading PDFs from Google Cloud Storage."""
 
+import json
 import logging
 import os
 from io import BytesIO
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from google.cloud import storage
 from google.cloud.exceptions import GoogleCloudError
@@ -95,4 +96,37 @@ class GCSClient:
         except Exception as e:
             logger.warning(f"Error checking file existence: {e}")
             return False
+
+    async def upload_json(
+        self, bucket_name: str, file_name: str, data: Dict[str, Any], content_type: str = "application/json"
+    ) -> None:
+        """
+        Upload JSON data to GCS.
+
+        Args:
+            bucket_name: Name of the GCS bucket
+            file_name: Name of the file in the bucket
+            data: Dictionary to serialize as JSON
+            content_type: Content type for the blob (default: application/json)
+
+        Raises:
+            GCSException: If the upload fails
+        """
+        try:
+            logger.debug(f"Uploading JSON to {file_name} in bucket {bucket_name}")
+            bucket = self.client.bucket(bucket_name)
+            blob = bucket.blob(file_name)
+
+            # Serialize to JSON
+            json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+            # Upload with content type
+            blob.upload_from_string(json_bytes, content_type=content_type)
+            logger.info(f"Successfully uploaded {file_name} ({len(json_bytes)} bytes) to bucket {bucket_name}")
+        except GoogleCloudError as e:
+            logger.error(f"GCS error uploading {file_name}: {e}")
+            raise GCSException(f"GCS error: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error uploading {file_name}: {e}")
+            raise GCSException(f"Failed to upload file: {e}") from e
 
